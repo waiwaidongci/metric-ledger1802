@@ -1,7 +1,8 @@
 import random,json
 from datetime import datetime,timedelta,timezone,date
 from src.config.database import SessionLocal,Base,engine
-from src.models import User,Metric,SourceRow,ReportRun,DeliverySchedule,Delivery
+from src.models import User,Metric,SourceRow,SourceScope,ReportRun,DeliverySchedule,Delivery
+from src.utils.checksum import rows_checksum
 from src.utils.security import hash_password
 from src.services.pivot_service import build_report
 
@@ -35,5 +36,10 @@ def seed():
             result=build_report(db.query(SourceRow).order_by(SourceRow.id).all(),db.query(Metric).order_by(Metric.id).all(),["channel","month"])
             run=ReportRun(name="11月经营口径核对 · 基准",dimensions=["channel","month"],status="completed",result=result,owner="宋予 · 经营分析师",schedule_id=schedules[0].id)
             db.add(run);db.flush();db.add(Delivery(schedule_id=schedules[0].id,run_id=run.id,title="经营周报 · 基准交付"))
-        db.commit();print(json.dumps({m.__tablename__:db.query(m).count() for m in [User,Metric,SourceRow,ReportRun,DeliverySchedule,Delivery]},ensure_ascii=False))
+        scopes=db.query(SourceRow).all()
+        for scope_channel,scope_month in sorted({(row.channel,row.day[:7]) for row in scopes}):
+            if not db.query(SourceScope).filter_by(channel=scope_channel,month=scope_month).first():
+                members=[row for row in scopes if row.channel==scope_channel and row.day[:7]==scope_month]
+                db.add(SourceScope(channel=scope_channel,month=scope_month,version=1,checksum=rows_checksum(members)))
+        db.commit();print(json.dumps({m.__tablename__:db.query(m).count() for m in [User,Metric,SourceRow,SourceScope,ReportRun,DeliverySchedule,Delivery]},ensure_ascii=False))
 if __name__=="__main__":seed()

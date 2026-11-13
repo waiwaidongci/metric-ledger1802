@@ -19,6 +19,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${JWT_SECRET:-local-demo-metric-ledger-change-this-key}
       SEED_DEMO: ${SEED_DEMO:-true}
+      SOURCE_BATCH_MAX_ROWS: ${SOURCE_BATCH_MAX_ROWS:-2000}
     ports: ["${BACKEND_PORT:-19204}:8000"]
     volumes: ["artifacts:/artifacts"]
     depends_on:

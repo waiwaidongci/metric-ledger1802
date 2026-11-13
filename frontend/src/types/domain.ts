@@ -7,3 +7,13 @@ export interface ReportRun{id:number;name:string;dimensions:string[];status:stri
 export interface Schedule{id:number;name:string;dimensions:string[];interval_minutes:number;next_run_at:string;active:boolean;owner:string}
 export interface Delivery{id:number;schedule_id:number;run_id:number;title:string;created_at:string}
 export interface Audit{id:number;actor:string;action:string;target:string;created_at:string}
+
+export interface SourceScopeSummary{channel:string;month:string;row_count:number;reference_net:number;canonical_net:number}
+export interface BatchCounts{existing:number;added:number;removed:number;changed:number;unchanged:number}
+export interface BatchFieldChange{field:string;before:string|number;after:string|number;delta?:number}
+export interface BatchChangedRow{source_key:string;before:SourceRow;after:SourceRow;changes:BatchFieldChange[]}
+export interface BatchTotals{before:Record<string,number>;after:Record<string,number>;delta:Record<string,number>}
+export interface BatchMetricValues{before:Record<string,number>|null;after:Record<string,number>|null;delta:Record<string,number>|null}
+export interface BatchPreview{batch_id:number;status:string;scope:{channel:string;month:string;version:number;checksum:string};checksum:string;row_count:number;counts:BatchCounts;added:SourceRow[];removed:SourceRow[];changed:BatchChangedRow[];truncated:boolean;totals:BatchTotals;net_revenue_delta:number;metrics:BatchMetricValues;reconciliation_rule:string;created_at:string}
+export interface BatchApplied{batch_id:number;status:string;already_applied:boolean;channel:string;month:string;row_count:number;checksum:string;scope_version:number;applied_by:string|null;applied_at:string|null}
+export interface BatchSummary{batch_id:number;channel:string;month:string;status:string;row_count:number;counts:BatchCounts;net_revenue_delta:number|null;created_by:string;created_at:string;applied_by:string|null;applied_at:string|null}

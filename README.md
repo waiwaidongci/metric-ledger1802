@@ -14,6 +14,8 @@
 | analyst / 经营分析师 | 六页阅读，创建报表和导出 | 编制渠道/月透视，定位差异 |
 | viewer / 渠道阅读者 | 只读、导出 | 打开站内交付并读取快照 |
 
+来源支持按渠道月份整月更正，但只能走“上传替换明细 → 预览 → 确认”三步，来源页本身只读。
+
 ## 快速启动
 
 ```bash
@@ -50,6 +52,8 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 **指标表达式与依赖DAG**：`backend/src/services/expression_service.py` 使用Python `ast.parse`，只允许字段、有限数值常量、括号、加减乘除、正负号。禁止eval/exec、函数调用、属性访问、下标、幂和布尔常量；最多50语法节点。来源字段仅revenue/cost/refunds/orders，派生指标不能覆盖来源。深度优先拓扑排序检测环路，未知引用在登记阶段422拒绝；还会用现有渠道/月与区域/月数据试算，零分母当场422拒绝。逐节点执行算术，分母绝对值小于1e-12或结果非有限/超范围时明确失败。
 
+**整月更正批次**：`source_batch_service.py` 只接受同一渠道同一月份的完整新批（CSV 或结构化行）。入口先做整批校验：表头必须与模板一致、每行列数与表头一致；来源编号非空且不与批内重复、不与其它渠道/月份已有序号冲突；`day` 必须是该月份内的 `YYYY-MM-DD`；`channel` 必须与所选范围一致；收入/退款/成本/参考净收入为有限数字、非负、|值|≤1e12，单数为 0–1e7 的整数。任何一行坏数据都返回 422 并列出最多 50 条行号/字段，整批不落库。预览只在 `source_batches` 保存批次内容和对比快照：当前/新批合计、逐字段 delta、净收入差额、按当前口径计算的指标变化，以及新增/删除/改值明细（每类最多 500 条）。确认时先把批次从 `preview` 条件更新为 `applying` 抢占，再比对预览时登记的 `source_scopes.version` 与现有来源实际 SHA256；来源在预览后发生变化则 409 拒绝旧批次。随后以 `source_scopes.version` 条件更新递增版本号——并发确认只有一个能通过，失败方整批回滚。同一批次重复确认直接返回 `already_applied=true`，不重复入库。生效方式为删除该渠道该月的全部来源行、写入完整新批并标记 `batch_key`/`scope_version`；核对页、透视报表和定时交付都读取当前来源，历史 `ReportRun.result` 快照保持不变。预览有效期 30 分钟，过期需重新预览。
+
 **透视与差异归因**：`pivot_service.py` 先按1–2个不重复维度（channel/month/region）分组，把原始金额、单数加总，再沿DAG计算派生指标。总计行重新汇总原始字段计算，绝不累加或简单平均比率。差异为来源`sum(revenue)-sum(refunds)`减`sum(reference_net)`；绝对差异大于0.01元的单元按绝对值降序归因。source_count和SHA256支持复算，输出保留6位小数。
 
 五项种子定义：net_revenue=revenue-refunds；gross_profit=net_revenue-cost；margin_rate=gross_profit/net_revenue；net_per_order=net_revenue/orders；refund_rate=refunds/revenue。比率单位为小数，界面显示4位。
@@ -58,7 +62,7 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 ## 页面与架构
 
-六页为交付总览、指标口径、来源核对、透视报表、定时交付、校对留痕。核心实体Metric、SourceRow、ReportRun、DeliverySchedule、Delivery分别贯穿SQLAlchemy模型、schema、service、route、前端API、store和页面。`MetricFormula`跨总览与口径页共用；`PivotTable`封装快照透视，`DataTable`、`Notice`、`StatusBadge`跨页共用；hooks分离异步动作与自动刷新。
+六页为交付总览、指标口径、来源核对、透视报表、定时交付、校对留痕。来源核对页提供范围选择、当前明细与模板导出、CSV 上传、增减/数值/净收入差额预览、确认生效和最近批次记录。核心实体Metric、SourceRow、ReportRun、DeliverySchedule、Delivery分别贯穿SQLAlchemy模型、schema、service、route、前端API、store和页面。`MetricFormula`跨总览与口径页共用；`PivotTable`封装快照透视，`DataTable`、`Notice`、`StatusBadge`跨页共用；hooks分离异步动作与自动刷新。
 
 | 部分 | 技术 |
 |---|---|
@@ -87,6 +91,7 @@ frontend/src/{api,stores,types,components,hooks,pages,router,utils,constants}
 | DB_PORT | 17704 | 数据库宿主端口 |
 | JWT_SECRET | local-metric-ledger-change-this-key | 本地演示签名密钥，部署前更换 |
 | SEED_DEMO | true | 启动自动seed |
+| SOURCE_BATCH_MAX_ROWS | 2000 | 单批整月更正的最大行数 |
 
 三个命名卷：db-data、redis-data、artifacts；backend与worker共享产物JSON。所有五服务有健康检查，worker2秒循环刷新心跳；frontend依赖backend，backend/worker依赖healthy数据库与Redis。首次建表用SQLAlchemy metadata，迁移目录提供索引示例，后续schema变更需审查迁移。
 
@@ -100,7 +105,7 @@ docker compose down -v --remove-orphans
 
 外置测试与截图位于`../../test-artifacts/gb-0005/`，含算法、API、真实周期和浏览器证据。源码不含截图/测试报告/日志，`.env`与日志不提交。
 
-目前面向本地合成研究：无文件上传/外部邮件/多租户隔离；仅支持算术口径，不支持任意SQL或函数。单worker调度不提供多实例分布式锁；running任务崩溃需重新提交，数据库事务与Redis入队之间无事务outbox。金额采用浮点并在输出舍入，非财务总账记账引擎。表达式以当前定义计算且结果保存快照；未提供已注册指标编辑/删除，现有数据试算通过后才能登记，后续来源变化仍可能造成任务失败，结果页会显示错误。来源页最多预览100行，计算用全部来源。Google Fonts无网络会回退字体。
+目前面向本地合成研究：来源更正的 CSV 走请求体内联上传，不落磁盘文件；无外部邮件/多租户隔离；仅支持算术口径，不支持任意SQL或函数。单worker调度不提供多实例分布式锁；running任务崩溃需重新提交，数据库事务与Redis入队之间无事务outbox。金额采用浮点并在输出舍入，非财务总账记账引擎。表达式以当前定义计算且结果保存快照；未提供已注册指标编辑/删除，现有数据试算通过后才能登记，后续来源变化仍可能造成任务失败，结果页会显示错误。来源页最多预览100行，计算用全部来源；整月更正的批次内容保存在数据库 JSON 中，单批上限 2000 行。Google Fonts无网络会回退字体。
 
 ## License
 
